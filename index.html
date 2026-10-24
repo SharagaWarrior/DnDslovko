@@ -938,8 +938,8 @@
     }
 
     function buildShareText() {
-      return "DnDovko " + getPuzzleNumber() + " " + getAttemptsCount() + "/6\n\n" +
-        buildEmojiGrid() + "\n\n#dndovko";
+      return "ДнДсловко " + getPuzzleNumber() + " " + getAttemptsCount() + "/6\n\n" +
+        buildEmojiGrid() + "\n\n#ДнДсловко";
     }
 
     function copyTextFallback(text) {
@@ -967,9 +967,8 @@
 
       if (typeof navigator.share === "function") {
         navigator.share({
-          title: "DnDovko",
-          text: text,
-          url: SHARE_URL
+          title: "ДнДсловко",
+          text: fullText
         }).catch(function (error) {
           console.log("Помилка шерингу:", error);
         });
