@@ -180,6 +180,16 @@
       min-height: 0;
     }
 
+    .countdown {
+      color: var(--muted-text);
+      font-size: 0.75rem;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.2px;
+      line-height: 1.2;
+      min-height: 1.2em;
+      white-space: nowrap;
+    }
+
     #board {
       display: grid;
       grid-template-rows: repeat(6, 1fr);
@@ -537,6 +547,7 @@
     <div id="board-wrapper">
       <div id="board"></div>
     </div>
+    <div id="countdown" class="countdown" aria-live="off">До нового слова: --:--:--</div>
     <div id="keyboard"></div>
   </div>
 
@@ -622,28 +633,165 @@
     const toastContainer = document.getElementById("toast-container");
     const resultMsgEl = document.getElementById("result-message");
     const shareBtn = document.getElementById("share-btn");
+    const countdownEl = document.getElementById("countdown");
 
     // ---------- Дата та слово дня ----------
-    function getTodayKey() {
-      return new Date().toISOString().slice(0, 10);
+    let kyivDateFormatter = null;
+    let kyivDateTimeFormatter = null;
+    let nextMidnightMs = 0;
+
+    function pad2(value) {
+      return String(value).padStart(2, "0");
     }
 
-    function getUtcMidnightMs() {
-      const now = new Date();
-      return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    function getKyivDateFormatter() {
+      if (kyivDateFormatter) return kyivDateFormatter;
+      const options = {
+        timeZone: "Europe/Kyiv",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      };
+      try {
+        kyivDateFormatter = new Intl.DateTimeFormat("en-CA", options);
+      } catch (e) {
+        try {
+          options.timeZone = "Europe/Kiev";
+          kyivDateFormatter = new Intl.DateTimeFormat("en-CA", options);
+        } catch (e2) {
+          kyivDateFormatter = null;
+        }
+      }
+      return kyivDateFormatter;
     }
 
-    function getDayNumber() {
-      return Math.floor(getUtcMidnightMs() / DAY_MS);
+    function getKyivDateTimeFormatter() {
+      if (kyivDateTimeFormatter) return kyivDateTimeFormatter;
+      const options = {
+        timeZone: "Europe/Kyiv",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23"
+      };
+      try {
+        kyivDateTimeFormatter = new Intl.DateTimeFormat("en-CA", options);
+      } catch (e) {
+        try {
+          options.timeZone = "Europe/Kiev";
+          kyivDateTimeFormatter = new Intl.DateTimeFormat("en-CA", options);
+        } catch (e2) {
+          kyivDateTimeFormatter = null;
+        }
+      }
+      return kyivDateTimeFormatter;
     }
 
-    function getPuzzleNumber() {
-      return Math.max(1, Math.floor((getUtcMidnightMs() - PUZZLE_EPOCH_MS) / DAY_MS) + 1);
+    function readDateParts(formatter, date) {
+      const parts = formatter.formatToParts(date);
+      const values = {};
+      parts.forEach(function (part) {
+        if (part.type !== "literal") values[part.type] = Number(part.value);
+      });
+      return values;
     }
 
-    function getDailyWord() {
-      const index = ((getDayNumber() % TARGET_WORDS.length) + TARGET_WORDS.length) % TARGET_WORDS.length;
+    function getKyivDateParts(date) {
+      const now = date || new Date();
+      const formatter = getKyivDateFormatter();
+      if (!formatter) {
+        const fallback = new Date(now.getTime() + 2 * 3600000);
+        return {
+          year: fallback.getUTCFullYear(),
+          month: fallback.getUTCMonth() + 1,
+          day: fallback.getUTCDate()
+        };
+      }
+      return readDateParts(formatter, now);
+    }
+
+    function getTodayKey(date) {
+      const parts = getKyivDateParts(date);
+      return parts.year + "-" + pad2(parts.month) + "-" + pad2(parts.day);
+    }
+
+    function getKyivDateOnlyMs(date) {
+      const parts = getKyivDateParts(date);
+      return Date.UTC(parts.year, parts.month - 1, parts.day);
+    }
+
+    function getPuzzleNumber(date) {
+      return Math.max(1, Math.floor((getKyivDateOnlyMs(date) - PUZZLE_EPOCH_MS) / DAY_MS) + 1);
+    }
+
+    function hashStringToUint32(value) {
+      let hash = 2166136261;
+      for (let i = 0; i < value.length; i++) {
+        hash ^= value.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    }
+
+    function getDailyWord(date) {
+      const index = hashStringToUint32("dndslovko:" + getTodayKey(date)) % TARGET_WORDS.length;
       return TARGET_WORDS[index];
+    }
+
+    function getKyivMidnightUtcMs(year, month, day) {
+      const targetLocalAsUtc = Date.UTC(year, month - 1, day);
+      const formatter = getKyivDateTimeFormatter();
+      if (!formatter) return targetLocalAsUtc - 2 * 3600000;
+
+      let guess = targetLocalAsUtc;
+      for (let i = 0; i < 4; i++) {
+        const parts = readDateParts(formatter, new Date(guess));
+        const actualLocalAsUtc = Date.UTC(
+          parts.year, parts.month - 1, parts.day,
+          parts.hour, parts.minute, parts.second
+        );
+        const diff = targetLocalAsUtc - actualLocalAsUtc;
+        if (diff === 0) break;
+        guess += diff;
+      }
+      return guess;
+    }
+
+    function getNextKyivMidnightMs(date) {
+      const parts = getKyivDateParts(date);
+      const nextDate = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + 1));
+      return getKyivMidnightUtcMs(
+        nextDate.getUTCFullYear(),
+        nextDate.getUTCMonth() + 1,
+        nextDate.getUTCDate()
+      );
+    }
+
+    function formatCountdown(ms) {
+      const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return pad2(hours) + ":" + pad2(minutes) + ":" + pad2(seconds);
+    }
+
+    function updateCountdown() {
+      const now = new Date();
+      const nowMs = now.getTime();
+      const currentKey = getTodayKey(now);
+
+      if (currentKey !== todayKey && !isAnimating) {
+        initGame();
+        nextMidnightMs = getNextKyivMidnightMs(now);
+      } else if (!nextMidnightMs || nowMs >= nextMidnightMs) {
+        nextMidnightMs = getNextKyivMidnightMs(now);
+      }
+
+      if (!countdownEl) return;
+      countdownEl.textContent = "До нового слова: " + formatCountdown(nextMidnightMs - nowMs);
     }
 
     // ---------- Тема ----------
@@ -1255,15 +1403,14 @@
 
     // Перевірка зміни дня, якщо вкладка була відкрита довго
     document.addEventListener("visibilitychange", function () {
-      if (document.visibilityState !== "visible") return;
-      if (getTodayKey() !== todayKey && !isAnimating) {
-        initGame();
-      }
+      if (document.visibilityState === "visible") updateCountdown();
     });
 
     // Старт гри
     applyTheme(getTheme());
     initGame();
+    updateCountdown();
+    setInterval(updateCountdown, 1000);
 
   </script>
 </body>
